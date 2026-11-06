@@ -1,0 +1,55 @@
+{
+  description = "feedback_core — crypto core for the Basecamp Feedback app (libsodium crypto_box_seal, sealed to the Feedback Desk)";
+
+  inputs = {
+    nixpkgs.follows = "logos-cpp-sdk/nixpkgs";
+    flake-utils.url = "github:numtide/flake-utils";
+    logos-cpp-sdk.url = "github:logos-co/logos-cpp-sdk";
+    logos-liblogos = {
+      url = "github:logos-co/logos-liblogos";
+      inputs.nixpkgs.follows = "nixpkgs";
+    };
+  };
+
+  outputs = { self, nixpkgs, flake-utils, logos-cpp-sdk, logos-liblogos }:
+    flake-utils.lib.eachDefaultSystem (system:
+      let
+        pkgs = import nixpkgs { inherit system; };
+        logosSdk = logos-cpp-sdk.packages.${system}.default;
+        logosHeaders = logos-liblogos.packages.${system}.default;
+      in {
+        devShells.default = pkgs.mkShell {
+          buildInputs = [ pkgs.cmake pkgs.ninja pkgs.pkg-config pkgs.qt6.qtbase pkgs.qt6.qtremoteobjects pkgs.libsodium ];
+          shellHook = ''
+            export LOGOS_CPP_SDK_ROOT="${logosSdk}"
+            export LOGOS_LIBLOGOS_HEADERS="${logosHeaders}/include"
+          '';
+        };
+
+        # feedback_core: the native crypto plugin (lib/feedback_core_plugin.<ext> + metadata)
+        packages.default = pkgs.stdenv.mkDerivation {
+          pname = "feedback-core";
+          version = "0.1.0";
+          src = ./.;
+          nativeBuildInputs = [ pkgs.cmake pkgs.ninja pkgs.pkg-config ];
+          buildInputs = [ pkgs.qt6.qtbase pkgs.qt6.qtremoteobjects pkgs.libsodium ];
+          cmakeFlags = [ "-GNinja" "-DCMAKE_BUILD_TYPE=Release" ];
+          dontWrapQtApps = true;
+          preConfigure = ''
+            export LOGOS_CPP_SDK_ROOT="${logosSdk}"
+            export LOGOS_LIBLOGOS_HEADERS="${logosHeaders}/include"
+          '';
+          buildPhase = ''
+            cmake --build . --target feedback_core_plugin -j$NIX_BUILD_CORES
+          '';
+          installPhase = ''
+            mkdir -p $out/lib
+            # CMake MODULE output is .so on both Linux and macOS, but the lgx bundler + host
+            # want the platform's shared-lib extension (.dylib on darwin). Install under that name.
+            cp core/feedback_core_plugin.so "$out/lib/feedback_core_plugin${pkgs.stdenv.hostPlatform.extensions.sharedLibrary}"
+            cp ${./metadata.json} $out/lib/metadata.json
+          '';
+        };
+      }
+    );
+}
